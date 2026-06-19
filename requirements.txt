@@ -1,0 +1,24 @@
+# HVR Voice Agent — Python deps
+#
+# Pinned floor against the current Pipecat "runner" API (mid-2026). If install
+# resolves a much newer version and imports break, check the quickstart:
+# https://github.com/pipecat-ai/pipecat-quickstart-phone-bot
+# Extras: cascaded (deepgram,openai,cartesia) + realtime (openai,xai) + silero,twilio
+# Pinned to the version verified locally (imports/API confirmed on 1.4.0).
+pipecat-ai[deepgram,openai,cartesia,silero,twilio,xai]==1.4.0
+
+# Web server for the landing page, /lead webhook, inbound TwiML and /ws stream
+fastapi>=0.115
+uvicorn[standard]>=0.30
+
+# Twilio REST client (used to place the instant outbound call)
+twilio>=9.0
+
+# Multi-tenant DB + RAG (Postgres + pgvector). Optional: only needed when
+# DATABASE_URL is set — the single-tenant demo runs without these.
+asyncpg>=0.30
+pgvector>=0.3
+
+# Misc
+python-dotenv>=1.0
+loguru>=0.7

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Get a call back in seconds</title>
+    <style>
+      :root { --brand:#c2603f; --brand2:#a8482b; --ink:#2a211a; --muted:#7a6f63; --bg:#faf6f1; }
+      * { box-sizing: border-box; }
+      body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+             background:var(--bg); color:var(--ink); display:grid; place-items:center; min-height:100vh; padding:1.25rem; }
+      .card { width:100%; max-width:440px; background:#fff; border:1px solid #e9e1d4; border-radius:24px;
+              box-shadow:0 24px 60px -20px rgba(120,80,40,.28); padding:2rem; }
+      .badge { display:inline-block; background:#f6e4da; color:var(--brand2); font-size:.72rem; font-weight:700;
+               letter-spacing:.08em; text-transform:uppercase; padding:.35rem .7rem; border-radius:999px; }
+      h1 { font-size:1.7rem; line-height:1.15; margin:.9rem 0 .4rem; letter-spacing:-.02em; }
+      p.sub { color:var(--muted); margin:0 0 1.4rem; line-height:1.5; }
+      label { display:block; font-size:.8rem; font-weight:600; color:var(--muted); margin:0 0 .35rem; }
+      input[type=text], input[type=tel] { width:100%; padding:.8rem .9rem; border:1px solid #e9e1d4; border-radius:12px;
+              font-size:1rem; margin-bottom:1rem; background:#fff; }
+      input:focus { outline:2px solid var(--brand); border-color:var(--brand); }
+      .consent { display:flex; gap:.6rem; align-items:flex-start; font-size:.8rem; color:var(--muted); margin-bottom:1.2rem; }
+      button { width:100%; border:0; border-radius:999px; padding:1rem; font-size:1rem; font-weight:700; color:#fff;
+               background:linear-gradient(135deg,#cf6a44,#a8482b); cursor:pointer; transition:transform .15s; }
+      button:hover { transform:translateY(-1px); }
+      button:disabled { opacity:.6; cursor:not-allowed; }
+      .ok { text-align:center; }
+      .ok .ring { width:64px;height:64px;border-radius:50%;margin:0 auto 1rem;display:grid;place-items:center;
+                  background:#f6e4da;color:var(--brand);font-size:1.8rem; }
+      .hide { display:none; }
+      .err { color:#b3261e; font-size:.85rem; margin:-.6rem 0 1rem; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <!-- Form -->
+      <div id="form-view">
+        <span class="badge">⚡ We call you in seconds</span>
+        <h1>Talk to an agent now</h1>
+        <p class="sub">Drop your number and our team rings you right away — no waiting, no forms to chase.</p>
+
+        <form id="lead-form">
+          <label for="name">Your name</label>
+          <input type="text" id="name" name="name" placeholder="Jane Smith" autocomplete="name" required />
+
+          <label for="phone">Mobile number</label>
+          <input type="tel" id="phone" name="phone" placeholder="+1 416 555 0199" autocomplete="tel" required />
+
+          <div id="err" class="err hide"></div>
+
+          <label class="consent">
+            <input type="checkbox" id="consent" name="consent" required />
+            <span>I agree to receive an automated phone call about my enquiry. Standard rates may apply.</span>
+          </label>
+
+          <button id="submit" type="submit">Call me now →</button>
+        </form>
+      </div>
+
+      <!-- Success -->
+      <div id="ok-view" class="ok hide">
+        <div class="ring">📞</div>
+        <h1>Calling you now!</h1>
+        <p class="sub">Keep your phone handy — you'll get a call in just a few seconds.</p>
+      </div>
+    </div>
+
+    <script>
+      const form = document.getElementById("lead-form");
+      const errEl = document.getElementById("err");
+      const btn = document.getElementById("submit");
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        errEl.classList.add("hide");
+        btn.disabled = true;
+        btn.textContent = "Connecting…";
+
+        const payload = {
+          name: document.getElementById("name").value.trim(),
+          phone: document.getElementById("phone").value.trim(),
+          consent: document.getElementById("consent").checked,
+          // which client this lead belongs to (multi-tenant): /?tenant=reidgroup
+          tenant: new URLSearchParams(location.search).get("tenant") || "",
+        };
+
+        try {
+          const res = await fetch("/lead", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || "Something went wrong. Please try again.");
+          }
+          document.getElementById("form-view").classList.add("hide");
+          document.getElementById("ok-view").classList.remove("hide");
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.classList.remove("hide");
+          btn.disabled = false;
+          btn.textContent = "Call me now →";
+        }
+      });
+    </script>
+  </body>
+</html>
