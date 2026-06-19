@@ -64,7 +64,8 @@ _TENANT_SELECT = """
     c.voice_name         as voice,
     c.name               as business_name,
     c.twilio_account_sid as twilio_account_sid,
-    c.twilio_auth_token  as twilio_auth_token_enc
+    c.twilio_auth_token  as twilio_auth_token_enc,
+    c.voice_transcribe   as voice_transcribe
 """
 
 
@@ -114,13 +115,12 @@ async def save_lead(
     pool = await get_pool()
     if not pool:
         return None
-    async with pool.acquire() as c:
-        lead_id = await c.fetchval(
-            """insert into leads (tenant_id, name, email, phone, source, consent, status)
-               values ($1,$2,$3,$4,$5,$6,'calling') returning id""",
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            """insert into voice_leads (id, client_id, name, email, phone, source, consent, status)
+               values (gen_random_uuid()::text,$1,$2,$3,$4,$5,$6,'calling') returning id""",
             tenant_id, name, email, phone, source, consent,
         )
-        return str(lead_id)
 
 
 # ── Calls / conversations ────────────────────────────────────────────────────
@@ -128,26 +128,27 @@ async def create_call(tenant_id, lead_id, call_sid, direction) -> Optional[str]:
     pool = await get_pool()
     if not pool:
         return None
-    async with pool.acquire() as c:
-        call_id = await c.fetchval(
-            """insert into calls (tenant_id, lead_id, call_sid, direction, status)
-               values ($1,$2,$3,$4,'in_progress') returning id""",
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            """insert into voice_calls (id, client_id, lead_id, call_sid, direction, status)
+               values (gen_random_uuid()::text,$1,$2,$3,$4,'in_progress') returning id""",
             tenant_id, lead_id, call_sid, direction,
         )
-        return str(call_id)
 
 
-async def finish_call(call_id, transcript: list, summary: str = None, outcome: str = None):
+async def finish_call(call_id, transcript=None, summary=None, outcome=None, lead_id=None):
     pool = await get_pool()
     if not pool or not call_id:
         return
-    async with pool.acquire() as c:
-        await c.execute(
-            """update calls
+    tjson = json.dumps(transcript) if transcript else None
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """update voice_calls
                  set status='completed', ended_at=now(),
-                     transcript=$2, summary=$3, outcome=$4
+                     transcript=$2::jsonb, summary=$3, outcome=$4,
+                     lead_id=coalesce(lead_id,$5)
                where id=$1""",
-            call_id, json.dumps(transcript), summary, outcome,
+            call_id, tjson, summary, outcome, lead_id,
         )
 
 

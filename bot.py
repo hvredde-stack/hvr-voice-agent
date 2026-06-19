@@ -29,6 +29,7 @@ from pipecat.transports.websocket.fastapi import (
 
 import crypto
 import db
+import summarize
 from prompts import first_turn_for, system_prompt_for
 from tools import build_tools, register_all
 
@@ -81,7 +82,8 @@ async def run_bot(
     )
 
     instructions = system_prompt_for(tenant, direction, lead_name)
-    register_all(llm, tenant)
+    call_state: dict = {}
+    register_all(llm, tenant, call_state)
     messages = [{"role": "system", "content": instructions}]
     context = LLMContext(messages, build_tools(tenant))
     context_aggregator = LLMContextAggregatorPair(context)
@@ -133,8 +135,21 @@ async def run_bot(
     await runner.run(task)
 
     if tenant_id and call_id:
+        summary, outcome = summarize.build(call_state)
+        new_lead_id = None
+        if not lead_id and call_state.get("lead"):
+            l = call_state["lead"]
+            try:
+                new_lead_id = await db.save_lead(
+                    tenant_id, l.get("name"), l.get("email"), l.get("phone") or "", "inbound", True
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"save_lead failed: {e}")
+        transcript = _extract_transcript(context) if (tenant or {}).get("voice_transcribe") else None
         try:
-            await db.finish_call(call_id, _extract_transcript(context))
-            logger.info(f"Call {call_id} transcript saved")
+            await db.finish_call(
+                call_id, transcript=transcript, summary=summary, outcome=outcome, lead_id=new_lead_id
+            )
+            logger.info(f"Call {call_id} saved — {outcome}: {summary}")
         except Exception as e:  # noqa: BLE001
             logger.error(f"finish_call failed: {e}")

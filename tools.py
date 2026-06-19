@@ -5,9 +5,6 @@ and a `search_knowledge` RAG tool is added. Without a DB it falls back to the
 single-tenant file behaviour, so the demo still works.
 """
 
-import json
-import os
-
 from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
@@ -15,8 +12,6 @@ from pipecat.services.llm_service import FunctionCallParams
 
 import db
 import rag
-
-LEADS_FILE = os.path.join(os.path.dirname(__file__), "leads.jsonl")
 
 # ── Schemas ──────────────────────────────────────────────────────────────────
 capture_lead_schema = FunctionSchema(
@@ -73,40 +68,34 @@ def build_tools(tenant: dict | None = None) -> ToolsSchema:
     return ToolsSchema(standard_tools=tools)
 
 
-def register_all(llm, tenant: dict | None = None):
-    """Register handlers on the LLM service. Handlers close over the tenant."""
+def register_all(llm, tenant: dict | None = None, state: dict | None = None):
+    """Register handlers on the LLM service.
+
+    Handlers record what they captured into `state` (a per-call dict). The bot
+    turns that into the persisted lead + the call's summary/outcome at hang-up —
+    no extra speech-to-text needed.
+    """
     tenant_id = tenant.get("id") if tenant else None
     db_on = bool(tenant_id) and db.db_enabled()
+    if state is None:
+        state = {}
 
     async def capture_lead(params: FunctionCallParams):
-        lead = dict(params.arguments)
-        if db_on:
-            try:
-                await db.save_lead(
-                    tenant_id, lead.get("name"), lead.get("email"),
-                    lead.get("phone") or "", "call", True,
-                )
-                logger.info(f"📥 Lead saved to DB (tenant {tenant_id}): {lead}")
-                await params.result_callback({"saved": True})
-                return
-            except Exception as e:  # noqa: BLE001
-                logger.error(f"DB save_lead failed, falling back to file: {e}")
-        try:
-            with open(LEADS_FILE, "a", encoding="utf-8") as f:
-                f.write(json.dumps(lead) + "\n")
-            await params.result_callback({"saved": True})
-        except Exception as e:  # noqa: BLE001
-            await params.result_callback({"saved": False, "error": str(e)})
+        state["lead"] = dict(params.arguments)
+        logger.info(f"📥 Lead captured: {state['lead']}")
+        await params.result_callback({"saved": True})
 
     async def book_appointment(params: FunctionCallParams):
-        args = params.arguments
-        logger.info(f"📅 Appointment requested: {args}")
+        state["appointment"] = dict(params.arguments)
+        logger.info(f"📅 Appointment: {state['appointment']}")
         await params.result_callback(
-            {"confirmed": True, "when": args.get("datetime"), "note": "Agent will confirm by text."}
+            {"confirmed": True, "when": params.arguments.get("datetime"),
+             "note": "Agent will confirm by text."}
         )
 
     async def transfer_to_human(params: FunctionCallParams):
-        logger.info(f"📞 Transfer requested: {params.arguments.get('reason')}")
+        state["transferred"] = params.arguments.get("reason", True)
+        logger.info(f"📞 Transfer requested: {state['transferred']}")
         await params.result_callback(
             {"transferring": True, "say": "Connecting you to an agent now, one moment."}
         )
