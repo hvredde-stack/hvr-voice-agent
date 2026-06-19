@@ -18,6 +18,8 @@ twilio>=9.0
 # DATABASE_URL is set — the single-tenant demo runs without these.
 asyncpg>=0.30
 pgvector>=0.3
+# Encrypt per-tenant secrets at rest (BYO Twilio auth token)
+cryptography>=42
 
 # Misc
 python-dotenv>=1.0

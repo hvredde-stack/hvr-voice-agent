@@ -38,7 +38,13 @@ async def get_pool():
         return None
     if _pool is None:
         _pool = await asyncpg.create_pool(
-            os.getenv("DATABASE_URL"), min_size=1, max_size=5, init=_init_conn
+            os.getenv("DATABASE_URL"),
+            min_size=1,
+            max_size=5,
+            init=_init_conn,
+            # Neon's pooled endpoint runs pgbouncer (transaction mode), which
+            # doesn't support prepared statements — disable asyncpg's cache.
+            statement_cache_size=0,
         )
         logger.info("DB pool created")
     return _pool
@@ -48,16 +54,29 @@ def db_enabled() -> bool:
     return bool(os.getenv("DATABASE_URL")) and asyncpg is not None
 
 
-# ── Tenant resolution ────────────────────────────────────────────────────────
+# ── Tenant resolution (tenant = the HVR `Client` row) ─────────────────────────
+# We read the HVR site's Prisma tables. Aliases map Client columns to the dict
+# keys the bots/tools expect (id, slug, system_prompt, voice, business_name, …).
+_TENANT_SELECT = """
+    c.id,
+    c.voice_slug         as slug,
+    c.voice_prompt       as system_prompt,
+    c.voice_name         as voice,
+    c.name               as business_name,
+    c.twilio_account_sid as twilio_account_sid,
+    c.twilio_auth_token  as twilio_auth_token_enc
+"""
+
+
 async def get_tenant_by_number(phone: str) -> Optional[dict]:
     pool = await get_pool()
     if not pool:
         return None
-    async with pool.acquire() as c:
-        row = await c.fetchrow(
-            """select t.* from tenants t
-               join tenant_numbers n on n.tenant_id = t.id
-               where n.phone_number = $1 and t.active""",
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f'''select {_TENANT_SELECT} from "Client" c
+                join agent_numbers n on n.client_id = c.id
+                where n.phone_number = $1 and c.voice_active''',
             phone,
         )
         return dict(row) if row else None
@@ -67,20 +86,24 @@ async def get_tenant_by_slug(slug: str) -> Optional[dict]:
     pool = await get_pool()
     if not pool:
         return None
-    async with pool.acquire() as c:
-        row = await c.fetchrow("select * from tenants where slug = $1 and active", slug)
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f'''select {_TENANT_SELECT} from "Client" c
+                where c.voice_slug = $1 and c.voice_active''',
+            slug,
+        )
         return dict(row) if row else None
 
 
-async def get_tenant_number(tenant_id) -> Optional[str]:
+async def get_tenant_number(client_id) -> Optional[str]:
     """The phone number to place outbound calls FROM for this tenant."""
     pool = await get_pool()
     if not pool:
         return None
-    async with pool.acquire() as c:
-        return await c.fetchval(
-            "select phone_number from tenant_numbers where tenant_id=$1 order by created_at limit 1",
-            tenant_id,
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            "select phone_number from agent_numbers where client_id=$1 order by created_at limit 1",
+            client_id,
         )
 
 

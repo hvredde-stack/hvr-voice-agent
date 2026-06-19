@@ -15,6 +15,10 @@ create table if not exists tenants (
   greeting       text,                          -- optional custom opening line
   voice          text default 'Ara',            -- Grok voice: Ara/Rex/Sal/Eve/Leo
   transfer_phone text,                           -- escalate-to-human number
+  -- Model B (bring-your-own Twilio): a client's own account. NULL → fall back
+  -- to the shared Twilio account from env (Model A). Token is Fernet-encrypted.
+  twilio_account_sid    text,
+  twilio_auth_token_enc text,
   active         boolean default true,
   created_at     timestamptz default now()
 );

@@ -28,6 +28,7 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
 )
 
+import crypto
 import db
 from prompts import first_turn_for, system_prompt_for
 from tools import build_tools, register_all
@@ -88,11 +89,14 @@ async def run_bot_realtime(
 
     _transport_type, call_data = await parse_telephony_websocket(websocket)
 
+    # BYO Twilio (Model B): use the tenant's own creds if set, else the shared account.
+    tw_sid = (tenant or {}).get("twilio_account_sid") or os.getenv("TWILIO_ACCOUNT_SID", "")
+    tw_token = crypto.decrypt((tenant or {}).get("twilio_auth_token_enc")) or os.getenv("TWILIO_AUTH_TOKEN", "")
     serializer = TwilioFrameSerializer(
         stream_sid=call_data["stream_id"],
         call_sid=call_data["call_id"],
-        account_sid=os.getenv("TWILIO_ACCOUNT_SID", ""),
-        auth_token=os.getenv("TWILIO_AUTH_TOKEN", ""),
+        account_sid=tw_sid,
+        auth_token=tw_token,
     )
     transport = FastAPIWebsocketTransport(
         websocket=websocket,

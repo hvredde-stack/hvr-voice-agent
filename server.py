@@ -19,6 +19,7 @@ from loguru import logger
 from twilio.rest import Client
 from twilio.twiml.voice_response import VoiceResponse
 
+import crypto
 import db
 
 load_dotenv(override=True)
@@ -60,6 +61,24 @@ def _stream_twiml(direction: str, *, tenant_slug="", lead_name="", lead_id="") -
     return str(resp)
 
 
+async def _twilio_creds(tenant):
+    """Resolve which Twilio account + from-number to use for a call.
+
+    - Full BYO creds on the tenant (Model B) → use them.
+    - Tenant has only a number (Model A: number under our shared account) → env creds + that number.
+    - No tenant → the shared account from env.
+    """
+    if tenant:
+        sid = tenant.get("twilio_account_sid")
+        tok = crypto.decrypt(tenant.get("twilio_auth_token_enc"))
+        num = await db.get_tenant_number(tenant["id"])
+        if sid and tok and num:
+            return sid, tok, num
+        if num:
+            return ACCOUNT_SID, AUTH_TOKEN, num
+    return ACCOUNT_SID, AUTH_TOKEN, TWILIO_NUMBER
+
+
 @app.get("/")
 async def landing():
     return FileResponse(os.path.join(os.path.dirname(__file__), "landing.html"))
@@ -97,16 +116,15 @@ async def lead(request: Request):
     # Resolve tenant + persist lead (multi-tenant), else single-tenant from env.
     tenant = await db.get_tenant_by_slug(tenant_slug) if tenant_slug else None
     lead_id = ""
-    from_number = TWILIO_NUMBER
     if tenant:
         try:
             lead_id = await db.save_lead(tenant["id"], name, email, phone, "instagram", consent) or ""
         except Exception as e:  # noqa: BLE001
             logger.error(f"save_lead failed: {e}")
-        from_number = (await db.get_tenant_number(tenant["id"])) or TWILIO_NUMBER
 
+    sid, token, from_number = await _twilio_creds(tenant)
     try:
-        client = Client(ACCOUNT_SID, AUTH_TOKEN)
+        client = Client(sid, token)
         call = client.calls.create(
             to=phone,
             from_=from_number,
