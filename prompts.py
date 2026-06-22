@@ -1,22 +1,13 @@
-"""Agent persona and call scripts.
-
-The voice agent can run as a single-tenant demo from .env, or as a multi-tenant
-agent where the HVR site stores each client's prompt and knowledge base.
-Prompts must stay business-agnostic by default: tenant prompt/KB content is the
-source of truth for the actual industry and services.
-"""
-
-import os
-
-BUSINESS_NAME = os.getenv("BUSINESS_NAME", "the team")
+"""Tenant-scoped agent persona and call scripts."""
 
 
 def _base_rules(business_name: str) -> str:
     return f"""
-You are Ava, a warm, professional voice assistant for {business_name}.
-The business type, services, areas, pricing, and policies must come from the
-configured client prompt and the knowledge base. Do not assume this is a real
-estate business unless the client prompt or knowledge base explicitly says so.
+You are the configured phone assistant for {business_name}.
+The client prompt and this client's knowledge base are the only source of truth
+for business type, services, areas, pricing, hours, policies, and next steps.
+Do not infer any industry, service category, or customer goal that is not present
+in those tenant-specific sources.
 
 How to speak:
 - You are on a live phone call. Keep replies to 1-2 short sentences.
@@ -37,52 +28,14 @@ Tools you can use:
 End the call politely once the goal is done or they want to go.
 """
 
-
-def _inbound_prompt(business_name: str) -> str:
-    return (
-        _base_rules(business_name)
-        + """
-This is an inbound call: someone called the business.
-Goal: greet them, find out what they need, get their name and best number/email,
-and either book a relevant next step or capture the lead for follow-up.
-"""
-    )
-
-
-def _outbound_prompt(business_name: str, lead_name: str | None = None) -> str:
-    name = lead_name or "there"
-    return (
-        _base_rules(business_name)
-        + f"""
-This is an outbound call: {name} just submitted a form moments ago, so they are
-expecting a quick call.
-Goal: thank them for reaching out, confirm what service or information they
-need, and book the next relevant step with the team. Open warmly by name, e.g.
-"Hi {name}, this is Ava with {business_name} - thanks for reaching out just now!"
-Be respectful of their time.
-"""
-    )
-
-
 def system_prompt(direction: str, lead_name: str | None = None) -> str:
-    """Return the single-tenant fallback prompt for the given call direction."""
-    if direction == "outbound":
-        return _outbound_prompt(BUSINESS_NAME, lead_name)
-    return _inbound_prompt(BUSINESS_NAME)
+    """Reject direct prompt creation without a tenant."""
+    raise RuntimeError("Tenant is required for voice prompts.")
 
 
 def first_turn_instruction(direction: str, lead_name: str | None = None) -> str:
-    """A one-off nudge to make the agent speak first when the call connects."""
-    if direction == "outbound":
-        name = lead_name or "there"
-        return (
-            f"Greet {name} by name, introduce yourself as Ava with {BUSINESS_NAME}, "
-            "thank them for reaching out just now, then ask how you can help."
-        )
-    return (
-        f"Answer the call warmly as {BUSINESS_NAME}'s assistant and ask how you "
-        "can help today."
-    )
+    """Reject first-turn creation without a tenant."""
+    raise RuntimeError("Tenant is required for first-turn instructions.")
 
 
 def system_prompt_for(
@@ -90,36 +43,38 @@ def system_prompt_for(
     direction: str,
     lead_name: str | None = None,
 ) -> str:
-    """Return a tenant-specific prompt, falling back to the env prompt."""
-    if tenant:
-        business_name = tenant.get("business_name") or BUSINESS_NAME
-        client_prompt = (tenant.get("system_prompt") or "").strip()
-        base = _base_rules(business_name)
-        if client_prompt:
-            base += f"\nClient-specific instructions:\n{client_prompt}\n"
+    """Return a tenant-specific prompt."""
+    if not tenant or not tenant.get("id"):
+        raise RuntimeError("Tenant is required for voice prompts.")
+    business_name = (tenant.get("business_name") or "").strip()
+    if not business_name:
+        raise RuntimeError("Tenant business name is required for voice prompts.")
 
-        if direction == "outbound":
-            name = lead_name or "there"
-            return (
-                base
-                + f"""
+    client_prompt = (tenant.get("system_prompt") or "").strip()
+    base = _base_rules(business_name)
+    if client_prompt:
+        base += f"\nClient-specific instructions:\n{client_prompt}\n"
+
+    if direction == "outbound":
+        name = lead_name or "there"
+        return (
+            base
+            + f"""
 This is an outbound call: {name} just submitted a form moments ago and is
 expecting a quick call. Greet them by name, thank them for reaching out, then
 help. Do not infer an industry, service category, or customer goal that is not
 present in the client-specific instructions or knowledge base.
 """
-            )
+        )
 
-        return (
-            base
-            + """
+    return (
+        base
+        + """
 This is an inbound call: greet warmly and ask how you can help.
 Do not infer an industry, service category, or customer goal that is not present
 in the client-specific instructions or knowledge base.
 """
-        )
-
-    return system_prompt(direction, lead_name)
+    )
 
 
 def first_turn_for(
@@ -127,17 +82,19 @@ def first_turn_for(
     direction: str,
     lead_name: str | None = None,
 ) -> str:
-    business_name = (tenant or {}).get("business_name")
-    if business_name:
-        if direction == "outbound":
-            name = lead_name or "there"
-            return (
-                f"Greet {name} by name, introduce yourself as the assistant for "
-                f"{business_name}, thank them for reaching out just now, then ask "
-                "how you can help."
-            )
+    if not tenant or not tenant.get("id"):
+        raise RuntimeError("Tenant is required for first-turn instructions.")
+    business_name = (tenant.get("business_name") or "").strip()
+    if not business_name:
+        raise RuntimeError("Tenant business name is required for first-turn instructions.")
+    if direction == "outbound":
+        name = lead_name or "there"
         return (
-            f"Answer the call warmly as {business_name}'s assistant and ask how "
-            "you can help today."
+            f"Greet {name} by name, introduce yourself as the assistant for "
+            f"{business_name}, thank them for reaching out just now, then ask "
+            "how you can help."
         )
-    return first_turn_instruction(direction, lead_name)
+    return (
+        f"Answer the call warmly as {business_name}'s assistant and ask how "
+        "you can help today."
+    )

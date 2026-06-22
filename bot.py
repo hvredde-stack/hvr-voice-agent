@@ -1,8 +1,7 @@
-"""Cascaded voice agent: Twilio → Deepgram (STT) → GPT-4o (+tools) → Cartesia (TTS).
+"""Cascaded voice agent: Twilio -> Deepgram (STT) -> GPT-4o (+tools) -> Cartesia (TTS).
 
-Tenant-aware like bot_realtime.py: a `tenant` dict (from the DB) drives the
-prompt/voice/tools/KB and the call+transcript are persisted. Without a tenant it
-runs single-tenant from .env. Used when VOICE_MODE=cascaded.
+A resolved tenant is mandatory. The tenant dict drives prompt, tools, knowledge
+base lookup, and persistence for the call.
 """
 
 import os
@@ -50,13 +49,15 @@ async def run_bot(
     websocket, direction: str = "inbound", lead_name: str | None = None,
     tenant: dict | None = None, lead_id: str | None = None,
 ):
-    tenant_id = (tenant or {}).get("id")
-    logger.info(f"Cascaded bot — dir={direction} tenant={tenant_id}")
+    if not tenant or not tenant.get("id"):
+        raise RuntimeError("Tenant is required to run the voice bot.")
+    tenant_id = tenant["id"]
+    logger.info(f"Cascaded bot - dir={direction} tenant={tenant_id}")
 
     _transport_type, call_data = await parse_telephony_websocket(websocket)
 
-    tw_sid = (tenant or {}).get("twilio_account_sid") or os.getenv("TWILIO_ACCOUNT_SID", "")
-    tw_token = crypto.decrypt((tenant or {}).get("twilio_auth_token_enc")) or os.getenv("TWILIO_AUTH_TOKEN", "")
+    tw_sid = tenant.get("twilio_account_sid") or os.getenv("TWILIO_ACCOUNT_SID", "")
+    tw_token = crypto.decrypt(tenant.get("twilio_auth_token_enc")) or os.getenv("TWILIO_AUTH_TOKEN", "")
     serializer = TwilioFrameSerializer(
         stream_sid=call_data["stream_id"],
         call_sid=call_data["call_id"],
@@ -115,14 +116,13 @@ async def run_bot(
     @transport.event_handler("on_client_connected")
     async def on_client_connected(_transport, _client):
         nonlocal call_id
-        logger.info("Caller connected — agent speaking first")
-        if tenant_id:
-            try:
-                call_id = await db.create_call(
-                    tenant_id, lead_id, call_data.get("call_id"), direction
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.error(f"create_call failed: {e}")
+        logger.info("Caller connected - agent speaking first")
+        try:
+            call_id = await db.create_call(
+                tenant_id, lead_id, call_data.get("call_id"), direction
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"create_call failed: {e}")
         messages.append({"role": "system", "content": first_turn_for(tenant, direction, lead_name)})
         await task.queue_frame(LLMRunFrame())
 
@@ -134,7 +134,7 @@ async def run_bot(
     runner = PipelineRunner(handle_sigint=False)
     await runner.run(task)
 
-    if tenant_id and call_id:
+    if call_id:
         summary, outcome = summarize.build(call_state)
         new_lead_id = None
         if not lead_id and call_state.get("lead"):
@@ -145,11 +145,11 @@ async def run_bot(
                 )
             except Exception as e:  # noqa: BLE001
                 logger.error(f"save_lead failed: {e}")
-        transcript = _extract_transcript(context) if (tenant or {}).get("voice_transcribe") else None
+        transcript = _extract_transcript(context) if tenant.get("voice_transcribe") else None
         try:
             await db.finish_call(
                 call_id, transcript=transcript, summary=summary, outcome=outcome, lead_id=new_lead_id
             )
-            logger.info(f"Call {call_id} saved — {outcome}: {summary}")
+            logger.info(f"Call {call_id} saved - {outcome}: {summary}")
         except Exception as e:  # noqa: BLE001
             logger.error(f"finish_call failed: {e}")

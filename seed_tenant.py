@@ -1,10 +1,20 @@
-"""Create/seed one tenant for testing.
+"""Seed voice-agent data for an existing HVR client.
 
-  1. Run the schema once:  psql "$DATABASE_URL" -f db/schema.sql
-  2. Set DATABASE_URL (+ OPENAI_API_KEY for the knowledge base) in .env
-  3. python seed_tenant.py
+This script intentionally has no sample client, industry, or generic prompt.
+Set all client-specific values explicitly before running it.
 
-Edit the TENANT / KB below for your real client.
+Required:
+  VOICE_SEED_SLUG       Existing Client.voice_slug
+  VOICE_SEED_PROMPT     Client-specific voice instructions
+  VOICE_SEED_KB         One or more KB facts separated by ||
+
+Optional:
+  VOICE_SEED_NUMBER     E.164 phone number to route to this client
+
+Example:
+  VOICE_SEED_SLUG=hvr-photography
+  VOICE_SEED_PROMPT="You help callers with HVR Photography services..."
+  VOICE_SEED_KB="Fact one.||Fact two."
 """
 
 import asyncio
@@ -17,66 +27,54 @@ load_dotenv(override=True)
 import db  # noqa: E402
 import rag  # noqa: E402
 
-TENANT = {
-    "slug": "reidgroup",
-    "name": "The Reid Group",
-    "business_name": "The Reid Group",
-    "voice": "Ara",  # Ara/Rex/Sal/Eve/Leo
-    "system_prompt": (
-        "You are Ava, the warm, professional assistant for The Reid Group, a real "
-        "estate team serving Durham Region and the east GTA. Find out if the caller is "
-        "buying or selling, their area and timeline, answer questions using the "
-        "search_knowledge tool, and book a free consultation. Keep replies to 1-2 short "
-        "sentences and never invent specific prices or legal advice."
-    ),
-}
-OWNER_EMAIL = "owner@thereidgroup.ca"          # login identity for the dashboard
-NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")  # routes calls to this tenant
-
+SLUG = os.getenv("VOICE_SEED_SLUG", "").strip()
+PROMPT = os.getenv("VOICE_SEED_PROMPT", "").strip()
+NUMBER = os.getenv("VOICE_SEED_NUMBER", "").strip()
 KB_DOCS = [
-    "The Reid Group serves Whitby, Oshawa, Ajax, Pickering, Clarington and the east GTA.",
-    "We offer free, no-obligation home valuations.",
-    "Jordan Reid has 12 years of experience and has sold over 480 homes.",
-    "Office hours are Monday to Saturday, 9am to 7pm.",
-    "We help buyers, sellers, first-time buyers, downsizers and investors.",
-    "Our listings sell in an average of 18 days at about 99% of asking price.",
+    item.strip()
+    for item in os.getenv("VOICE_SEED_KB", "").split("||")
+    if item.strip()
 ]
 
 
 async def main():
     if not db.db_enabled():
-        print("❌ DATABASE_URL not set (or asyncpg missing). Set it in .env first.")
+        print("DATABASE_URL is not set or asyncpg is missing.")
         return
-    pool = await db.get_pool()
-    async with pool.acquire() as c:
-        tid = await c.fetchval(
-            """insert into tenants (slug, name, business_name, system_prompt, voice)
-               values ($1,$2,$3,$4,$5)
-               on conflict (slug) do update
-                 set name=excluded.name, business_name=excluded.business_name,
-                     system_prompt=excluded.system_prompt, voice=excluded.voice
-               returning id""",
-            TENANT["slug"], TENANT["name"], TENANT["business_name"],
-            TENANT["system_prompt"], TENANT["voice"],
-        )
-        await c.execute(
-            "insert into tenant_users (tenant_id, email, role) values ($1,$2,'owner') "
-            "on conflict (email) do nothing",
-            tid, OWNER_EMAIL,
-        )
-        if NUMBER:
-            await c.execute(
-                "insert into tenant_numbers (tenant_id, phone_number) values ($1,$2) "
-                "on conflict (phone_number) do nothing",
-                tid, NUMBER,
-            )
-        await c.execute("delete from kb_docs where tenant_id=$1", tid)
+    if not SLUG or not PROMPT or not KB_DOCS:
+        print("Set VOICE_SEED_SLUG, VOICE_SEED_PROMPT, and VOICE_SEED_KB first.")
+        return
 
-    await rag.ingest(tid, KB_DOCS)  # needs OPENAI_API_KEY; skips with a warning if absent
-    print(f"✅ Seeded tenant '{TENANT['slug']}' ({tid})")
-    print(f"   • owner login: {OWNER_EMAIL}")
-    print(f"   • routes number: {NUMBER or '(none set)'}")
-    print(f"   • landing page: https://<PUBLIC_HOST>/?tenant={TENANT['slug']}")
+    pool = await db.get_pool()
+    async with pool.acquire() as conn:
+        client_id = await conn.fetchval(
+            '''update "Client"
+                  set voice_prompt=$2, voice_active=true
+                where voice_slug=$1
+                returning id''',
+            SLUG,
+            PROMPT,
+        )
+        if not client_id:
+            print(f"No active Client row found with voice_slug={SLUG!r}.")
+            return
+
+        if NUMBER:
+            await conn.execute(
+                """insert into agent_numbers (id, client_id, phone_number)
+                   values ($1,$2,$3)
+                   on conflict (phone_number) do update
+                     set client_id=excluded.client_id""",
+                db._new_id(),  # noqa: SLF001 - local maintenance script
+                client_id,
+                NUMBER,
+            )
+
+        await conn.execute("delete from kb_docs where tenant_id=$1", client_id)
+
+    await rag.ingest(client_id, KB_DOCS)
+    print(f"Seeded voice data for client slug {SLUG!r}.")
+    print(f"Landing page: https://<PUBLIC_HOST>/?tenant={SLUG}")
 
 
 if __name__ == "__main__":

@@ -1,9 +1,7 @@
-"""Speech-to-speech (realtime) agent — one model hears+thinks+speaks.
+"""Speech-to-speech (realtime) agent - one model hears+thinks+speaks.
 
-Used for BOTH inbound and outbound calls. Tenant-aware: when a `tenant` dict is
-passed (loaded from the DB), the prompt/voice/tools/knowledge come from that
-tenant and the call+transcript are persisted. Without a tenant it runs in
-single-tenant mode from .env (the working demo).
+Used for BOTH inbound and outbound calls. A resolved tenant is mandatory; the
+tenant prompt, tools, knowledge base, and persistence are scoped to that client.
 
 Provider switch (REALTIME_PROVIDER): grok (default) | openai.
 Imports follow the current Pipecat 1.x API.
@@ -85,14 +83,16 @@ async def run_bot_realtime(
     websocket, direction: str = "inbound", lead_name: str | None = None,
     tenant: dict | None = None, lead_id: str | None = None,
 ):
-    tenant_id = (tenant or {}).get("id")
-    logger.info(f"REALTIME bot — provider={PROVIDER} dir={direction} tenant={tenant_id}")
+    if not tenant or not tenant.get("id"):
+        raise RuntimeError("Tenant is required to run the voice bot.")
+    tenant_id = tenant["id"]
+    logger.info(f"REALTIME bot - provider={PROVIDER} dir={direction} tenant={tenant_id}")
 
     _transport_type, call_data = await parse_telephony_websocket(websocket)
 
     # BYO Twilio (Model B): use the tenant's own creds if set, else the shared account.
-    tw_sid = (tenant or {}).get("twilio_account_sid") or os.getenv("TWILIO_ACCOUNT_SID", "")
-    tw_token = crypto.decrypt((tenant or {}).get("twilio_auth_token_enc")) or os.getenv("TWILIO_AUTH_TOKEN", "")
+    tw_sid = tenant.get("twilio_account_sid") or os.getenv("TWILIO_ACCOUNT_SID", "")
+    tw_token = crypto.decrypt(tenant.get("twilio_auth_token_enc")) or os.getenv("TWILIO_AUTH_TOKEN", "")
     serializer = TwilioFrameSerializer(
         stream_sid=call_data["stream_id"],
         call_sid=call_data["call_id"],
@@ -111,7 +111,7 @@ async def run_bot_realtime(
     )
 
     instructions = system_prompt_for(tenant, direction, lead_name)
-    voice = (tenant or {}).get("voice") or os.getenv("GROK_VOICE", "Ara")
+    voice = tenant.get("voice") or os.getenv("GROK_VOICE", "Ara")
     llm = _build_realtime_llm(instructions, voice)
     call_state: dict = {}
     register_all(llm, tenant, call_state)
@@ -145,14 +145,13 @@ async def run_bot_realtime(
     @transport.event_handler("on_client_connected")
     async def on_client_connected(_transport, _client):
         nonlocal call_id
-        logger.info("Caller connected — agent speaking first")
-        if tenant_id:
-            try:
-                call_id = await db.create_call(
-                    tenant_id, lead_id, call_data.get("call_id"), direction
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.error(f"create_call failed: {e}")
+        logger.info("Caller connected - agent speaking first")
+        try:
+            call_id = await db.create_call(
+                tenant_id, lead_id, call_data.get("call_id"), direction
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"create_call failed: {e}")
         messages.append({"role": "system", "content": first_turn_for(tenant, direction, lead_name)})
         await task.queue_frame(LLMRunFrame())
 
@@ -166,7 +165,7 @@ async def run_bot_realtime(
 
     # Persist the call once it ends: summary + outcome always; transcript only
     # if this tenant opted in (full transcription is the only piece that costs extra).
-    if tenant_id and call_id:
+    if call_id:
         summary, outcome = summarize.build(call_state)
         new_lead_id = None
         if not lead_id and call_state.get("lead"):
@@ -177,11 +176,11 @@ async def run_bot_realtime(
                 )
             except Exception as e:  # noqa: BLE001
                 logger.error(f"save_lead failed: {e}")
-        transcript = _extract_transcript(context) if (tenant or {}).get("voice_transcribe") else None
+        transcript = _extract_transcript(context) if tenant.get("voice_transcribe") else None
         try:
             await db.finish_call(
                 call_id, transcript=transcript, summary=summary, outcome=outcome, lead_id=new_lead_id
             )
-            logger.info(f"Call {call_id} saved — {outcome}: {summary}")
+            logger.info(f"Call {call_id} saved - {outcome}: {summary}")
         except Exception as e:  # noqa: BLE001
             logger.error(f"finish_call failed: {e}")

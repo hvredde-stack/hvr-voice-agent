@@ -80,6 +80,14 @@
       const form = document.getElementById("lead-form");
       const errEl = document.getElementById("err");
       const btn = document.getElementById("submit");
+      const tenant = (new URLSearchParams(location.search).get("tenant") || "").trim();
+
+      if (!tenant) {
+        errEl.textContent = "This call link is missing its client tenant. Please contact HVR.";
+        errEl.classList.remove("hide");
+        btn.disabled = true;
+        btn.textContent = "Link not configured";
+      }
 
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
@@ -91,8 +99,7 @@
           name: document.getElementById("name").value.trim(),
           phone: document.getElementById("phone").value.trim(),
           consent: document.getElementById("consent").checked,
-          // which client this lead belongs to (multi-tenant): /?tenant=reidgroup
-          tenant: new URLSearchParams(location.search).get("tenant") || "",
+          tenant,
         };
 
         try {

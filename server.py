@@ -1,9 +1,9 @@
-"""FastAPI server — landing page, instant-callback webhook, inbound TwiML, media stream.
+"""FastAPI server - landing page, instant-callback webhook, inbound TwiML, media stream.
 
-Multi-tenant + guarded:
-  - With a DB: resolve tenant (by dialed number inbound / by slug outbound),
-    save leads to Postgres, drive the call with that tenant's config.
-  - Without a DB: single-tenant from .env (the working demo) — unchanged.
+Strict multi-tenant routing:
+  - Outbound calls require an active tenant slug.
+  - Inbound calls require the dialed number to map to an active tenant.
+  - Bot sessions never run without the resolved tenant's prompt/tools/KB.
 
 Run:  uvicorn server:app --host 0.0.0.0 --port 8000
 """
@@ -31,15 +31,14 @@ if VOICE_MODE == "realtime":
 else:
     from bot import run_bot
 
-# On Render, RENDER_EXTERNAL_HOSTNAME is injected automatically — use it when
+# On Render, RENDER_EXTERNAL_HOSTNAME is injected automatically - use it when
 # PUBLIC_HOST isn't set (so you don't hand-wire the URL in prod).
 PUBLIC_HOST = (
     os.getenv("PUBLIC_HOST") or os.getenv("RENDER_EXTERNAL_HOSTNAME") or ""
 ).replace("https://", "").replace("http://", "").strip("/")
-TWILIO_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
 ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
-PROMPT_VERSION = "business_agnostic_2026_06_22"
+PROMPT_VERSION = "tenant_strict_2026_06_22"
 
 app = FastAPI(title="HVR Voice Agent")
 app.add_middleware(
@@ -47,12 +46,13 @@ app.add_middleware(
 )
 
 
-def _stream_twiml(direction: str, *, tenant_slug="", lead_name="", lead_id="") -> str:
+def _stream_twiml(direction: str, *, tenant_slug: str, lead_name="", lead_id="") -> str:
     if not PUBLIC_HOST:
-        raise RuntimeError("PUBLIC_HOST is not set — Twilio can't reach the stream.")
+        raise RuntimeError("PUBLIC_HOST is not set - Twilio can't reach the stream.")
+    if not tenant_slug:
+        raise RuntimeError("Tenant slug is required for the media stream.")
     qs = f"direction={direction}"
-    if tenant_slug:
-        qs += f"&tenant={quote(tenant_slug)}"
+    qs += f"&tenant={quote(tenant_slug)}"
     if lead_name:
         qs += f"&lead_name={quote(lead_name)}"
     if lead_id:
@@ -62,22 +62,33 @@ def _stream_twiml(direction: str, *, tenant_slug="", lead_name="", lead_id="") -
     return str(resp)
 
 
+def _reject_twiml(message: str) -> str:
+    resp = VoiceResponse()
+    resp.say(message)
+    resp.hangup()
+    return str(resp)
+
+
 async def _twilio_creds(tenant):
     """Resolve which Twilio account + from-number to use for a call.
 
-    - Full BYO creds on the tenant (Model B) → use them.
-    - Tenant has only a number (Model A: number under our shared account) → env creds + that number.
-    - No tenant → the shared account from env.
+    - Full BYO creds on the tenant (Model B) -> use them.
+    - Tenant has only a number (Model A: number under our shared account) -> env creds + that number.
     """
-    if tenant:
-        sid = tenant.get("twilio_account_sid")
-        tok = crypto.decrypt(tenant.get("twilio_auth_token_enc"))
-        num = await db.get_tenant_number(tenant["id"])
-        if sid and tok and num:
-            return sid, tok, num
-        if num:
-            return ACCOUNT_SID, AUTH_TOKEN, num
-    return ACCOUNT_SID, AUTH_TOKEN, TWILIO_NUMBER
+    if not tenant or not tenant.get("id"):
+        raise RuntimeError("Tenant is required for outbound calls.")
+
+    num = await db.get_tenant_number(tenant["id"])
+    if not num:
+        raise RuntimeError("No active phone number is configured for this client.")
+
+    sid = tenant.get("twilio_account_sid")
+    tok = crypto.decrypt(tenant.get("twilio_auth_token_enc"))
+    if sid and tok:
+        return sid, tok, num
+    if ACCOUNT_SID and AUTH_TOKEN:
+        return ACCOUNT_SID, AUTH_TOKEN, num
+    raise RuntimeError("Shared Twilio credentials are not configured.")
 
 
 @app.get("/")
@@ -88,9 +99,10 @@ async def landing():
 @app.get("/health")
 async def health():
     return {
-        "ok": all([PUBLIC_HOST, TWILIO_NUMBER, ACCOUNT_SID, AUTH_TOKEN]),
+        "ok": all([PUBLIC_HOST, ACCOUNT_SID, AUTH_TOKEN, db.db_enabled()]),
         "public_host": PUBLIC_HOST or None,
         "multi_tenant": db.db_enabled(),
+        "tenant_routing_required": True,
         "voice_mode": VOICE_MODE,
         "prompt_version": PROMPT_VERSION,
     }
@@ -98,7 +110,7 @@ async def health():
 
 @app.post("/lead")
 async def lead(request: Request):
-    """A lead submitted (IG form / Meta webhook) → call them NOW."""
+    """A lead submitted (IG form / Meta webhook) -> call them NOW."""
     try:
         data = await request.json()
     except Exception:  # noqa: BLE001
@@ -115,27 +127,36 @@ async def lead(request: Request):
     if not consent:
         return JSONResponse({"error": "consent is required to place a call"}, status_code=400)
 
-    # Resolve tenant + persist lead (multi-tenant), else single-tenant from env.
-    tenant = await db.get_tenant_by_slug(tenant_slug) if tenant_slug else None
-    if tenant_slug and not tenant:
+    if not db.db_enabled():
+        return JSONResponse(
+            {"error": "Tenant database is not configured."},
+            status_code=503,
+        )
+    if not tenant_slug:
+        return JSONResponse(
+            {"error": "This lead-capture link is missing its client tenant."},
+            status_code=400,
+        )
+
+    tenant = await db.get_tenant_by_slug(tenant_slug)
+    if not tenant:
         return JSONResponse(
             {"error": "This lead-capture link is not active. Please contact HVR."},
             status_code=404,
         )
 
     lead_id = ""
-    if tenant:
-        try:
-            lead_id = await db.save_lead(tenant["id"], name, email, phone, "instagram", consent) or ""
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"save_lead failed: {e}")
-            return JSONResponse(
-                {"error": "Lead was not saved. Please try again."},
-                status_code=500,
-            )
-
-    sid, token, from_number = await _twilio_creds(tenant)
     try:
+        lead_id = await db.save_lead(tenant["id"], name, email, phone, "instagram", consent) or ""
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"save_lead failed: {e}")
+        return JSONResponse(
+            {"error": "Lead was not saved. Please try again."},
+            status_code=500,
+        )
+
+    try:
+        sid, token, from_number = await _twilio_creds(tenant)
         client = Client(sid, token)
         call = client.calls.create(
             to=phone,
@@ -144,7 +165,7 @@ async def lead(request: Request):
                 "outbound", tenant_slug=tenant_slug, lead_name=name or "", lead_id=lead_id
             ),
         )
-        logger.info(f"📞 Outbound call to {phone} (tenant={tenant_slug or 'single'}) → {call.sid}")
+        logger.info(f"Outbound call to {phone} (tenant={tenant_slug}) -> {call.sid}")
         return {"status": "calling", "call_sid": call.sid}
     except Exception as e:  # noqa: BLE001
         logger.error(f"Outbound call failed: {e}")
@@ -153,13 +174,18 @@ async def lead(request: Request):
 
 @app.post("/twilio/inbound")
 async def twilio_inbound(request: Request):
-    """Twilio hits this when someone calls a number → route to its tenant."""
+    """Twilio hits this when someone calls a number -> route to its tenant."""
     form = dict(await request.form())
     dialed = (form.get("To") or "").strip()
-    tenant = await db.get_tenant_by_number(dialed) if dialed else None
-    slug = tenant["slug"] if tenant else ""
+    tenant = await db.get_tenant_by_number(dialed) if db.db_enabled() and dialed else None
+    if not tenant:
+        logger.warning(f"Inbound call rejected: no active tenant for number {dialed!r}")
+        return Response(
+            content=_reject_twiml("This voice line is not configured for an active client."),
+            media_type="application/xml",
+        )
     return Response(
-        content=_stream_twiml("inbound", tenant_slug=slug), media_type="application/xml"
+        content=_stream_twiml("inbound", tenant_slug=tenant["slug"]), media_type="application/xml"
     )
 
 
@@ -171,8 +197,17 @@ async def ws(websocket: WebSocket):
     lead_name = q.get("lead_name")
     lead_id = q.get("lead_id") or None
     tenant_slug = q.get("tenant")
-    tenant = await db.get_tenant_by_slug(tenant_slug) if tenant_slug else None
-    logger.info(f"WS connected — dir={direction} tenant={tenant_slug or 'single'}")
+    if not db.db_enabled():
+        await websocket.close(code=1011, reason="tenant database unavailable")
+        return
+    if not tenant_slug:
+        await websocket.close(code=1008, reason="tenant required")
+        return
+    tenant = await db.get_tenant_by_slug(tenant_slug)
+    if not tenant:
+        await websocket.close(code=1008, reason="tenant inactive")
+        return
+    logger.info(f"WS connected - dir={direction} tenant={tenant_slug}")
     try:
         await run_bot(websocket, direction, lead_name, tenant=tenant, lead_id=lead_id)
     except Exception as e:  # noqa: BLE001

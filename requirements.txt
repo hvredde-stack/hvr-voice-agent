@@ -10,12 +10,12 @@ pipecat-ai[deepgram,openai,cartesia,silero,twilio,xai]==1.4.0
 # Web server for the landing page, /lead webhook, inbound TwiML and /ws stream
 fastapi>=0.115
 uvicorn[standard]>=0.30
+python-multipart>=0.0.20
 
 # Twilio REST client (used to place the instant outbound call)
 twilio>=9.0
 
-# Multi-tenant DB + RAG (Postgres + pgvector). Optional: only needed when
-# DATABASE_URL is set — the single-tenant demo runs without these.
+# Multi-tenant DB + RAG (Postgres + pgvector).
 asyncpg>=0.30
 pgvector>=0.3
 # Encrypt per-tenant secrets at rest (BYO Twilio auth token)

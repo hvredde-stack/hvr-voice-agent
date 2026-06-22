@@ -1,7 +1,7 @@
 """RAG helpers: embed text and search a tenant's knowledge base.
 
-Embeddings use OpenAI text-embedding-3-small (1536 dims, cheap). Set
-OPENAI_API_KEY to enable; without it, ingest/search no-op gracefully.
+Embeddings use OpenAI text-embedding-3-small (1536 dims). If embeddings are
+unavailable, KB text is still stored and tenant-scoped text search is used.
 """
 
 import os
@@ -37,10 +37,15 @@ async def embed(text: str) -> Optional[list[float]]:
 async def ingest(tenant_id, chunks: list[str]):
     """Embed and store a list of text chunks for a tenant's knowledge base."""
     for chunk in chunks:
-        vec = await embed(chunk)
+        try:
+            vec = await embed(chunk)
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                f"KB embed failed; storing text without embedding: {type(e).__name__}"
+            )
+            vec = None
         if vec is None:
-            logger.warning("No OPENAI_API_KEY — skipping KB ingest")
-            return
+            logger.warning("No embedding available - storing KB text only")
         await db.insert_kb_doc(tenant_id, chunk, vec)
     logger.info(f"Ingested {len(chunks)} KB chunks for tenant {tenant_id}")
 

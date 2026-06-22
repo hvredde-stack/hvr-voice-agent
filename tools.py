@@ -1,9 +1,4 @@
-"""Function-calling tools the agent can invoke mid-call.
-
-Tenant-aware: when a tenant and DB are present, capture_lead writes to Postgres
-and a search_knowledge RAG tool is added. Without a DB it falls back to the
-single-tenant demo behavior.
-"""
+"""Tenant-scoped function-calling tools the agent can invoke mid-call."""
 
 from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
@@ -75,9 +70,11 @@ search_knowledge_schema = FunctionSchema(
 
 
 def build_tools(tenant: dict | None = None) -> ToolsSchema:
-    """The tool schemas the LLM sees; adds search_knowledge in tenant/DB mode."""
+    """The tool schemas the LLM sees for this tenant."""
+    if not tenant or not tenant.get("id"):
+        raise RuntimeError("Tenant is required to build tools.")
     tools = [capture_lead_schema, book_appointment_schema, transfer_schema]
-    if tenant and db.db_enabled():
+    if db.db_enabled():
         tools.append(search_knowledge_schema)
     return ToolsSchema(standard_tools=tools)
 
@@ -88,8 +85,10 @@ def register_all(llm, tenant: dict | None = None, state: dict | None = None):
     Handlers record what they captured into state. The bot turns that into the
     persisted lead plus call summary/outcome at hang-up.
     """
-    tenant_id = tenant.get("id") if tenant else None
-    db_on = bool(tenant_id) and db.db_enabled()
+    if not tenant or not tenant.get("id"):
+        raise RuntimeError("Tenant is required to register tools.")
+    tenant_id = tenant["id"]
+    db_on = db.db_enabled()
     if state is None:
         state = {}
 

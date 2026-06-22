@@ -1,8 +1,8 @@
 """Async Postgres data layer for the multi-tenant voice agent.
 
-GUARDED: if DATABASE_URL is unset (or asyncpg isn't installed), `get_pool()`
-returns None and every helper no-ops / returns None. That keeps the
-single-tenant .env demo working without any database.
+If DATABASE_URL is unset or asyncpg is unavailable, helpers no-op. The API layer
+requires the database before placing calls, so production calls always resolve
+through tenant-scoped client rows, numbers, leads, calls, and KB docs.
 
 Run the schema first:  psql "$DATABASE_URL" -f db/schema.sql
 """
@@ -163,20 +163,27 @@ async def finish_call(call_id, transcript=None, summary=None, outcome=None, lead
 
 
 # ── Knowledge base (vector search) ───────────────────────────────────────────
-async def insert_kb_doc(tenant_id, content: str, embedding: list[float]):
+async def insert_kb_doc(tenant_id, content: str, embedding: list[float] | None = None):
     pool = await get_pool()
     if not pool:
         return
+    doc_id = _new_id()
     async with pool.acquire() as c:
+        if embedding is None:
+            await c.execute(
+                "insert into kb_docs (id, tenant_id, content) values ($1,$2,$3)",
+                doc_id, tenant_id, content,
+            )
+            return
         try:
             await c.execute(
-                "insert into kb_docs (tenant_id, content, embedding) values ($1,$2,$3)",
-                tenant_id, content, embedding,
+                "insert into kb_docs (id, tenant_id, content, embedding) values ($1,$2,$3,$4)",
+                doc_id, tenant_id, content, embedding,
             )
         except Exception:  # noqa: BLE001 — fallback if vector type isn't registered
             await c.execute(
-                "insert into kb_docs (tenant_id, content, embedding) values ($1,$2,$3::vector)",
-                tenant_id, content, str(embedding),
+                "insert into kb_docs (id, tenant_id, content, embedding) values ($1,$2,$3,$4::vector)",
+                doc_id, tenant_id, content, str(embedding),
             )
 
 
