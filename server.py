@@ -39,6 +39,7 @@ PUBLIC_HOST = (
 TWILIO_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
 ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+PROMPT_VERSION = "business_agnostic_2026_06_22"
 
 app = FastAPI(title="HVR Voice Agent")
 app.add_middleware(
@@ -91,6 +92,7 @@ async def health():
         "public_host": PUBLIC_HOST or None,
         "multi_tenant": db.db_enabled(),
         "voice_mode": VOICE_MODE,
+        "prompt_version": PROMPT_VERSION,
     }
 
 
