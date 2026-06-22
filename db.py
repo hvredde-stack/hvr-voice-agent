@@ -9,6 +9,7 @@ Run the schema first:  psql "$DATABASE_URL" -f db/schema.sql
 
 import json
 import os
+import re
 import uuid
 from typing import Any, Optional
 
@@ -197,3 +198,32 @@ async def search_kb(tenant_id, embedding: list[float], k: int = 4) -> list[str]:
                 tenant_id, str(embedding), k,
             )
         return [r["content"] for r in rows]
+
+
+async def search_kb_text(tenant_id, query: str, k: int = 4) -> list[str]:
+    """Small, dependency-free fallback when embeddings are missing/unavailable."""
+    pool = await get_pool()
+    if not pool:
+        return []
+    words = {
+        w
+        for w in re.findall(r"[a-z0-9]+", (query or "").lower())
+        if len(w) > 2
+    }
+    async with pool.acquire() as c:
+        rows = await c.fetch(
+            """select content from kb_docs
+               where tenant_id=$1
+               order by created_at desc
+               limit 50""",
+            tenant_id,
+        )
+    docs = [r["content"] for r in rows]
+    if not words:
+        return docs[:k]
+    ranked = sorted(
+        docs,
+        key=lambda text: sum(1 for w in words if w in text.lower()),
+        reverse=True,
+    )
+    return [text for text in ranked if any(w in text.lower() for w in words)][:k] or docs[:k]

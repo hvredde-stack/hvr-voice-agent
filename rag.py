@@ -47,7 +47,19 @@ async def ingest(tenant_id, chunks: list[str]):
 
 async def search(tenant_id, query: str, k: int = 4) -> list[str]:
     """Return the top-k knowledge chunks relevant to the query."""
-    vec = await embed(query)
+    try:
+        vec = await embed(query)
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            f"Embedding search failed; falling back to text KB search: {type(e).__name__}"
+        )
+        vec = None
     if vec is None:
-        return []
-    return await db.search_kb(tenant_id, vec, k)
+        return await db.search_kb_text(tenant_id, query, k)
+    try:
+        return await db.search_kb(tenant_id, vec, k)
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            f"Vector KB search failed; falling back to text KB search: {type(e).__name__}"
+        )
+        return await db.search_kb_text(tenant_id, query, k)
