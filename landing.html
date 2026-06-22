@@ -5,28 +5,39 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Get a call back in seconds</title>
     <style>
-      :root { --brand:#c2603f; --brand2:#a8482b; --ink:#2a211a; --muted:#7a6f63; --bg:#faf6f1; }
+      :root {
+        --brand:#2b5bb0;
+        --brand2:#16306b;
+        --accent:#5b9ae6;
+        --ink:#15223f;
+        --muted:#5c6680;
+        --bg:#eef1f4;
+        --surface:#ffffff;
+        --border:#dde2ea;
+        --soft:#e4ecf9;
+      }
       * { box-sizing: border-box; }
       body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
              background:var(--bg); color:var(--ink); display:grid; place-items:center; min-height:100vh; padding:1.25rem; }
-      .card { width:100%; max-width:440px; background:#fff; border:1px solid #e9e1d4; border-radius:24px;
-              box-shadow:0 24px 60px -20px rgba(120,80,40,.28); padding:2rem; }
-      .badge { display:inline-block; background:#f6e4da; color:var(--brand2); font-size:.72rem; font-weight:700;
+      .card { width:100%; max-width:440px; background:var(--surface); border:1px solid var(--border); border-radius:24px;
+              box-shadow:0 24px 60px -20px rgba(18,40,80,.22); padding:2rem; }
+      .badge { display:inline-block; background:var(--soft); color:var(--brand2); font-size:.72rem; font-weight:700;
                letter-spacing:.08em; text-transform:uppercase; padding:.35rem .7rem; border-radius:999px; }
       h1 { font-size:1.7rem; line-height:1.15; margin:.9rem 0 .4rem; letter-spacing:-.02em; }
       p.sub { color:var(--muted); margin:0 0 1.4rem; line-height:1.5; }
       label { display:block; font-size:.8rem; font-weight:600; color:var(--muted); margin:0 0 .35rem; }
-      input[type=text], input[type=tel] { width:100%; padding:.8rem .9rem; border:1px solid #e9e1d4; border-radius:12px;
-              font-size:1rem; margin-bottom:1rem; background:#fff; }
+      input[type=text], input[type=tel] { width:100%; padding:.8rem .9rem; border:1px solid var(--border); border-radius:12px;
+              font-size:1rem; margin-bottom:1rem; background:var(--surface); color:var(--ink); }
       input:focus { outline:2px solid var(--brand); border-color:var(--brand); }
       .consent { display:flex; gap:.6rem; align-items:flex-start; font-size:.8rem; color:var(--muted); margin-bottom:1.2rem; }
+      .consent input { accent-color:var(--brand); }
       button { width:100%; border:0; border-radius:999px; padding:1rem; font-size:1rem; font-weight:700; color:#fff;
-               background:linear-gradient(135deg,#cf6a44,#a8482b); cursor:pointer; transition:transform .15s; }
+               background:linear-gradient(135deg,var(--brand),var(--brand2)); cursor:pointer; transition:transform .15s; }
       button:hover { transform:translateY(-1px); }
       button:disabled { opacity:.6; cursor:not-allowed; }
       .ok { text-align:center; }
       .ok .ring { width:64px;height:64px;border-radius:50%;margin:0 auto 1rem;display:grid;place-items:center;
-                  background:#f6e4da;color:var(--brand);font-size:1.8rem; }
+                  background:var(--soft);color:var(--brand);font-size:1.8rem; }
       .hide { display:none; }
       .err { color:#b3261e; font-size:.85rem; margin:-.6rem 0 1rem; }
     </style>

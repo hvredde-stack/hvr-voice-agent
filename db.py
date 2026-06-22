@@ -9,6 +9,7 @@ Run the schema first:  psql "$DATABASE_URL" -f db/schema.sql
 
 import json
 import os
+import uuid
 from typing import Any, Optional
 
 from loguru import logger
@@ -19,6 +20,10 @@ except ImportError:  # demo runs fine without it
     asyncpg = None
 
 _pool: Optional["asyncpg.Pool"] = None
+
+
+def _new_id() -> str:
+    return str(uuid.uuid4())
 
 
 async def _init_conn(conn):
@@ -115,12 +120,14 @@ async def save_lead(
     pool = await get_pool()
     if not pool:
         return None
+    lead_id = _new_id()
     async with pool.acquire() as conn:
-        return await conn.fetchval(
+        await conn.execute(
             """insert into voice_leads (id, client_id, name, email, phone, source, consent, status)
-               values (gen_random_uuid()::text,$1,$2,$3,$4,$5,$6,'calling') returning id""",
-            tenant_id, name, email, phone, source, consent,
+               values ($1,$2,$3,$4,$5,$6,$7,'calling')""",
+            lead_id, tenant_id, name, email, phone, source, consent,
         )
+        return lead_id
 
 
 # ── Calls / conversations ────────────────────────────────────────────────────
@@ -128,12 +135,14 @@ async def create_call(tenant_id, lead_id, call_sid, direction) -> Optional[str]:
     pool = await get_pool()
     if not pool:
         return None
+    call_id = _new_id()
     async with pool.acquire() as conn:
-        return await conn.fetchval(
+        await conn.execute(
             """insert into voice_calls (id, client_id, lead_id, call_sid, direction, status)
-               values (gen_random_uuid()::text,$1,$2,$3,$4,'in_progress') returning id""",
-            tenant_id, lead_id, call_sid, direction,
+               values ($1,$2,$3,$4,$5,'in_progress')""",
+            call_id, tenant_id, lead_id, call_sid, direction,
         )
+        return call_id
 
 
 async def finish_call(call_id, transcript=None, summary=None, outcome=None, lead_id=None):

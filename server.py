@@ -115,12 +115,22 @@ async def lead(request: Request):
 
     # Resolve tenant + persist lead (multi-tenant), else single-tenant from env.
     tenant = await db.get_tenant_by_slug(tenant_slug) if tenant_slug else None
+    if tenant_slug and not tenant:
+        return JSONResponse(
+            {"error": "This lead-capture link is not active. Please contact HVR."},
+            status_code=404,
+        )
+
     lead_id = ""
     if tenant:
         try:
             lead_id = await db.save_lead(tenant["id"], name, email, phone, "instagram", consent) or ""
         except Exception as e:  # noqa: BLE001
             logger.error(f"save_lead failed: {e}")
+            return JSONResponse(
+                {"error": "Lead was not saved. Please try again."},
+                status_code=500,
+            )
 
     sid, token, from_number = await _twilio_creds(tenant)
     try:
